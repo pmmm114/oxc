@@ -122,7 +122,25 @@ fn run<'a>(possible_jest_node: &PossibleJestNode<'a, '_>, ctx: &LintContext<'a>)
         return;
     }
 
-    match &call_expr.arguments[1] {
+    // Vitest supports describe('name', options, callback) syntax where the second argument
+    // is an options object (e.g., { timeout: 10_000 }) and the third is the callback.
+    // In this case, we need to validate the callback which is at index 2.
+    let callback_index = if ctx.is_vitest_context()
+        && arg_len == 3
+        && matches!(&call_expr.arguments[1], Argument::ObjectExpression(_))
+    {
+        2 // Third argument is the callback in vitest options syntax
+    } else {
+        1 // Second argument is the callback (standard jest/vitest syntax)
+    };
+
+    // Ensure the callback index is valid
+    if callback_index >= arg_len {
+        diagnostic(ctx, call_expr.arguments[1].span(), Message::SecondArgumentMustBeFunction);
+        return;
+    }
+
+    match &call_expr.arguments[callback_index] {
         Argument::FunctionExpression(fn_expr) => {
             // Vitest supports async describe callbacks, so skip this check when configured under vitest namespace
             if fn_expr.r#async && !ctx.is_vitest_context() {
@@ -452,6 +470,13 @@ fn test_vitest() {
             ",
             None,
         ),
+        // Vitest supports describe('name', options, callback) syntax
+        ("describe('foo', { timeout: 10_000 }, () => {})", None),
+        ("describe('foo', { timeout: 10_000 }, async () => {})", None),
+        ("describe('foo', { retry: 3 }, function() {})", None),
+        ("describe('foo', { concurrent: true }, async function() {})", None),
+        ("describe.only('foo', { timeout: 5000 }, () => {})", None),
+        ("describe.skip('foo', { timeout: 5000 }, () => {})", None),
     ];
 
     let fail = vec![
